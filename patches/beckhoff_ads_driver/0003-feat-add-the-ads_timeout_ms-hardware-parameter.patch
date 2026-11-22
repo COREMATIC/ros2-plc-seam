@@ -1,0 +1,37 @@
+From ac141487b1da7fca4041d7d2f322e88e534cbc19 Mon Sep 17 00:00:00 2001
+From: Renaud Bouckenooghe <renaud.bouckenooghe@corematic.eu>
+Date: Sun, 22 Nov 2026 02:24:46 +0000
+Subject: [PATCH 3/5] feat: add the ads_timeout_ms hardware parameter
+
+Each ADS call blocks the control loop until the PLC answers or the
+timeout expires, 5000 ms by default. With the link down, every cycle
+then stalls 5 s before the error is reported. The optional parameter
+sets the AdsDevice timeout; without it, nothing changes.
+
+  <param name="ads_timeout_ms">500</param>
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../src/beckhoff_ads_hardware_interface.cpp                 | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp b/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
+index 1bf320b..d666084 100644
+--- a/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
++++ b/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
+@@ -765,6 +765,12 @@ namespace beckhoff_ads_hardware_interface
+ 
+             bhf::ads::SetLocalAddress(local_net_id);
+             ads_device_ = std::make_unique<AdsDevice>(plc_ip, remote_net_id, plc_ams_port);
++            // Each ADS call blocks the control loop until the PLC answers or the timeout expires
++            // (5000 ms by default): keep it short so a dead link fails fast.
++            if (params.count("ads_timeout_ms"))
++            {
++                ads_device_->SetTimeout(std::stoul(params.at("ads_timeout_ms")));
++            }
+             RCLCPP_INFO(getLogger(), "\tTimeout is: %u", ads_device_->GetTimeout());
+ 
+             RCLCPP_INFO(getLogger(), "\tADS Device configured for PLC: %s, Port: %u", plc_ip.c_str(), plc_ams_port);
+-- 
+2.43.0
+

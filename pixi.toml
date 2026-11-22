@@ -1,0 +1,49 @@
+[workspace]
+name = "ros2-plc-seam"
+description = "ROS 2 next to a PLC that owns motion"
+channels = ["https://prefix.dev/robostack-jazzy", "https://prefix.dev/conda-forge"]
+platforms = ["linux-64", "linux-aarch64", "osx-64", "osx-arm64", "win-64"]
+
+# ROS 2 Jazzy and every tool come from RoboStack and conda-forge: no ROS install on the host.
+[dependencies]
+python = "3.12.*"
+ros-jazzy-ros-core = "*"
+ros-jazzy-ros2launch = "*"
+ros-jazzy-control-msgs = "*"
+ros-jazzy-sensor-msgs = "*"
+ros-jazzy-geometry-msgs = "*"
+ros-jazzy-tf2-ros = "*"
+ros-jazzy-tf2-geometry-msgs = "*"
+ros-jazzy-controller-manager = "*"
+ros-jazzy-forward-command-controller = "*"
+ros-jazzy-gpio-controllers = "*"
+ros-jazzy-joint-state-broadcaster = "*"
+ros-jazzy-robot-state-publisher = "*"
+ros-jazzy-xacro = "*"
+ros-jazzy-ament-cmake = "*"
+ros-jazzy-rosidl-default-generators = "*"
+colcon-common-extensions = "*"
+setuptools = "*"
+pytest = "*"
+cmake = "*"
+ninja = "*"
+pkg-config = "*"
+compilers = "*"
+
+# The workspace's own packages, once built.
+[activation]
+scripts = ["install/setup.sh"]
+
+[target.win-64.activation]
+scripts = ["install/setup.bat"]
+
+[tasks]
+build = "colcon build"
+test = { cmd = "colcon test --packages-select plc_seam && colcon test-result --verbose", depends-on = ["build"] }
+# No PLC: plc_sim plays the PLC side of the handshake.
+# A nested `pixi run`: the environment is activated again, after build created install/setup.sh.
+demo = { cmd = "pixi run ros2 launch plc_seam bringup.launch.py", depends-on = ["build"] }
+
+# plc:=ads: the Beckhoff ADS driver, built from source with the fixes in patches/ (Linux, macOS).
+[target.unix.tasks]
+fetch-ads-driver = "bash tools/fetch_ads_driver.sh src"

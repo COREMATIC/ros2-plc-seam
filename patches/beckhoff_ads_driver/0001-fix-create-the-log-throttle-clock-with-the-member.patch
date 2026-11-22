@@ -1,0 +1,44 @@
+From 03379e5546655137ebdb81c911bff837bb1e5414 Mon Sep 17 00:00:00 2001
+From: Renaud Bouckenooghe <renaud.bouckenooghe@corematic.eu>
+Date: Sun, 22 Nov 2026 02:24:45 +0000
+Subject: [PATCH 1/5] fix: create the log throttle clock with the member
+
+On Jazzy the on_init(const HardwareComponentParams &) overload is never
+called by the resource manager, so logging_throttle_clock_ stayed null.
+The first throttled log, which is the first failed ADS read or write,
+dereferenced it and the controller manager died with SIGSEGV.
+
+Create the clock where the member is declared, so it exists whichever
+on_init overload the distribution calls.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../beckhoff_ads_hardware_interface.hpp                      | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp b/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp
+index 19fca57..5d48fdc 100644
+--- a/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp
++++ b/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp
+@@ -20,6 +20,7 @@
+ #include "hardware_interface/handle.hpp"
+ #include "hardware_interface/hardware_info.hpp"
+ #include "hardware_interface/types/hardware_interface_return_values.hpp"
++#include "rclcpp/clock.hpp"
+ #include "rclcpp/macros.hpp"
+ #include "rclcpp_lifecycle/state.hpp"
+ 
+@@ -120,7 +121,9 @@ namespace beckhoff_ads_hardware_interface
+ 
+   private:
+     rclcpp::Logger getLogger() { return rclcpp::get_logger("BeckhoffADSHardwareInterface"); }
+-    std::shared_ptr<rclcpp::Clock> logging_throttle_clock_;
++    // Created here, not in on_init: the on_init overload above is not the one Jazzy calls, so a clock
++    // created there stayed null and the first throttled error log crashed the process.
++    std::shared_ptr<rclcpp::Clock> logging_throttle_clock_ = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
+ 
+     // ========= PLC ==============================
+ 
+-- 
+2.43.0
+
