@@ -25,6 +25,8 @@ clone_at() {   # dir url commit
 
 driver="$dest/beckhoff_ads_driver"
 clone_at "$driver" "$DRIVER_URL" "$DRIVER_COMMIT"
+# A patch that failed on an earlier run leaves `git am` in progress: end it, or this run fails too.
+git -C "$driver" am --abort 2>/dev/null || true
 git -C "$driver" checkout --quiet -B "$BRANCH" "$DRIVER_COMMIT"
 git -C "$driver" -c user.name=plc_seam -c user.email=plc_seam@localhost \
     am --quiet "$repo"/patches/beckhoff_ads_driver/*.patch

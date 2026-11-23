@@ -226,6 +226,7 @@ src/
     plc_seam/
       plc_bridge_node.py        the machine-initiated cycle
       plc_sim.py                a PLC stand-in that plays the handshake
+      handshake.py              the GPIO names and topics both sides share
       target_source_random.py   ┐
       target_source_sim.py      ├ three implementations of one service
       target_source_camera.py   ┘

@@ -46,8 +46,14 @@ class PlcBridge(Node):
     def __init__(self):
         super().__init__('plc_bridge')
 
+        # Targets in any other frame are refused: the PLC reads raw numbers.
+        self.declare_parameter('base_frame', 'base_link')
+        # A call with no answer after this long is dropped, so the next
+        # request edge is served again (a source that died mid-call).
+        self.declare_parameter('service_timeout_s', 5.0)
+
         self._prev_request = 0.0
-        self._in_flight = False
+        self._in_flight = None              # (future, start time) of the pending call
         self._source_empty = False          # we raised source_empty, no ack yet
 
         self._cmd_pub = self.create_publisher(
@@ -69,7 +75,8 @@ class PlcBridge(Node):
             i = msg.interface_groups.index(name)
         except ValueError:
             return None
-        return msg.interface_values[i].values[0]
+        values = msg.interface_values[i].values
+        return values[0] if values else None
 
     def _set_gpio(self, name: str, value: float):
         msg = DynamicInterfaceGroupValues()
@@ -90,28 +97,47 @@ class PlcBridge(Node):
         if request is None:
             return
 
-        if request == 1.0 and self._prev_request != 1.0 and not self._in_flight:
+        self._expire_stale_call()
+        if request == 1.0 and self._prev_request != 1.0 and self._in_flight is None:
             self.request_target()
-        elif request != 1.0 and self._prev_request == 1.0:
-            # The machine finished the move; drop our ready flag.
+        elif request != 1.0 and (
+                self._prev_request == 1.0 or self._read_gpio(msg, TARGET_READY) == 1.0):
+            # The machine finished the move; drop our ready flag. The read-back
+            # also clears a flag left high by an earlier run of this node.
             self._set_gpio(TARGET_READY, 0.0)
 
         self._prev_request = request
 
-        if self._source_empty and self._read_gpio(msg, EMPTY_ACK) == 1.0:
+        if self._read_gpio(msg, EMPTY_ACK) == 1.0 and (
+                self._source_empty or self._read_gpio(msg, SOURCE_EMPTY) == 1.0):
             self._source_empty = False
             self._set_gpio(SOURCE_EMPTY, 0.0)
+
+    def _expire_stale_call(self):
+        if self._in_flight is None:
+            return
+        future, start = self._in_flight
+        timeout_s = self.get_parameter('service_timeout_s').value
+        if (self.get_clock().now() - start).nanoseconds * 1e-9 > timeout_s:
+            self.get_logger().error('Target source did not answer in time; dropping the call')
+            self._in_flight = None
+            self._client.remove_pending_request(future)
+            future.cancel()
 
     def request_target(self):
         if not self._client.service_is_ready():
             self.get_logger().warn('No target source available; skipping cycle')
             return
-        self._in_flight = True
-        self._client.call_async(GetTarget.Request()).add_done_callback(
-            self.on_target)
+        future = self._client.call_async(GetTarget.Request())
+        self._in_flight = (future, self.get_clock().now())
+        future.add_done_callback(self.on_target)
 
     def on_target(self, future):
-        self._in_flight = False
+        if self._in_flight is None or self._in_flight[0] is not future:
+            return                          # dropped by _expire_stale_call
+        self._in_flight = None
+        if future.cancelled():
+            return
         try:
             response = future.result()
         except Exception as exc:                      # noqa: BLE001
@@ -126,6 +152,19 @@ class PlcBridge(Node):
 
         if not response.success:
             self.get_logger().error('Target source reported no valid target')
+            return
+
+        if self._prev_request != 1.0:
+            # The PLC gave up on this request (its watchdog) before we answered.
+            # A late target_ready would sit high while the PLC waits for it to drop.
+            self.get_logger().warn('Target arrived after the PLC dropped its request; discarded')
+            return
+
+        base_frame = self.get_parameter('base_frame').value
+        if response.target.header.frame_id != base_frame:
+            self.get_logger().error(
+                f'Target in frame {response.target.header.frame_id!r}, '
+                f'not {base_frame!r}: not commanded')
             return
 
         p = response.target.point

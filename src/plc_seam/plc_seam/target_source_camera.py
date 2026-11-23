@@ -45,7 +45,12 @@ class CameraTargetSource(Node):
         self.get_logger().info('Camera target source ready on get_target')
 
     def on_request(self, request, response):
-        reading_mm = self._detector() if self._detector else None
+        try:
+            reading_mm = self._detector() if self._detector else None
+        except Exception as exc:                      # noqa: BLE001
+            # An exception here would end spin() and leave the caller waiting.
+            self.get_logger().error(f'Detector failed: {exc}')
+            return response
         if reading_mm is None:
             self.get_logger().warn('No valid detection this cycle')
             return response
@@ -53,7 +58,8 @@ class CameraTargetSource(Node):
         in_camera = PointStamped()
         in_camera.header.stamp = self.get_clock().now().to_msg()
         in_camera.header.frame_id = self.get_parameter('camera_frame').value
-        in_camera.point.x, in_camera.point.y, in_camera.point.z = reading_mm
+        # float(): Point rejects ints, and a driver may hand integer millimetres.
+        in_camera.point.x, in_camera.point.y, in_camera.point.z = map(float, reading_mm)
 
         # ---- the boundary. Millimetres stop here. ----
         point_mm_to_m(in_camera.point)
