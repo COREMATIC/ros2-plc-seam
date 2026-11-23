@@ -116,6 +116,18 @@ def test_source_reports_exhaustion_rather_than_looping_forever():
         source.destroy_node()
 
 
+def test_sim_source_serves_each_point_once():
+    """One simulator point, one pick: a served point is not sent to the PLC again."""
+    source = _seeded_sim()
+    try:
+        assert _call_service(source).success
+        again = _call_service(source)
+        assert not again.success, 'the same point was served twice'
+        assert not again.source_exhausted
+    finally:
+        source.destroy_node()
+
+
 def test_every_implementation_is_covered():
     """Fails when someone adds a source and forgets to test it.
 

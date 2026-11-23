@@ -49,9 +49,14 @@ ros2 topic pub --once /sim/target_point geometry_msgs/msg/PointStamped \
     "{header: {frame_id: base_link}, point: {x: 0.4, y: 0.3, z: -0.8}}"
 ```
 
-Until a point arrives, the source answers "no valid target" and the PLC asks again every
-5 seconds. Publish `x: 1.2` (outside the window) and the PLC refuses it. The source clamps a
-point below its floor (`z = -1.02`) itself, before the PLC sees it.
+Each point is served once: one point, one pick. Until a new point arrives, the source answers
+"no valid target" and the PLC asks again every 5 seconds. Publish `x: 1.2` (outside the window)
+and the PLC refuses it. The source clamps a point below its floor (`z = -1.02`) itself, before
+the PLC sees it.
+
+The working window lives in one file, [`config/envelope.yaml`](src/plc_seam/config/envelope.yaml),
+in metres. The URDF joint limits, the PLC stand-in's window and the random source's ranges are
+all read from it.
 
 ## How it fits together
 
@@ -231,7 +236,9 @@ src/
       target_source_sim.py      ├ three implementations of one service
       target_source_camera.py   ┘
       units.py                  metres inside, millimetres at the boundary
+      envelope.py               the working window, from config/envelope.yaml
     config/controllers.yaml     three controllers, no planner
+    config/envelope.yaml        the working window, in metres: the one definition
     urdf/                       a neutral gantry and the PLC binding macros
     launch/bringup.launch.py    same stack, any source, sim or real PLC
     test/                       the contract test and the PLC stand-in test

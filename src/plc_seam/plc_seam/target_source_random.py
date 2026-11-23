@@ -14,6 +14,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 
 from plc_seam_interfaces.srv import GetTarget
+from plc_seam import envelope
 
 
 class RandomTargetSource(Node):
@@ -21,10 +22,10 @@ class RandomTargetSource(Node):
     def __init__(self):
         super().__init__('target_source_random')
 
-        # Envelope in METRES. Keep these inside the URDF joint limits.
-        self.declare_parameter('x_range_m', [0.0, 0.75])
-        self.declare_parameter('y_range_m', [0.0, 0.55])
-        self.declare_parameter('z_range_m', [-1.02, -0.40])
+        # Ranges in METRES; config/envelope.yaml by default.
+        window = envelope.load()
+        for axis in envelope.AXES:
+            self.declare_parameter(f'{axis}_range_m', list(window[axis]))
         self.declare_parameter('frame_id', 'base_link')
         self.declare_parameter('targets_before_exhausted', 5)
 

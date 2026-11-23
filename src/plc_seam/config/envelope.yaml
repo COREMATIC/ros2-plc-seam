@@ -1,0 +1,7 @@
+# The working window, in METRES in base_link: [lower, upper] per axis.
+# The one place it is defined. robot.urdf.xacro takes the joint limits from it
+# (xacro.load_yaml); plc_sim, target_source_random and target_source_sim take
+# their defaults from it (plc_seam/envelope.py).
+x: [0.0, 0.75]
+y: [0.0, 0.55]
+z: [-1.02, -0.40]

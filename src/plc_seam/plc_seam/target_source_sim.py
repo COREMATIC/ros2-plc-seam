@@ -1,8 +1,10 @@
 """Target source: whatever the simulator is currently looking at.
 
-The simulator publishes a candidate target on a plain topic. This node caches
-the latest one and re-serves it through the same service the other sources
-use, so nothing downstream changes when you switch to it.
+The simulator publishes a candidate target on a plain topic. This node keeps
+the latest one and serves it through the same service the other sources use,
+so nothing downstream changes when you switch to it. Each point is served
+once: one point, one pick. Until the simulator publishes a new one, the
+source answers "no valid target" and the PLC asks again.
 
 That indirection is the whole trick. The simulator was adopted here for about
 a hundred lines precisely because this interface already existed for the
@@ -18,6 +20,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import PointStamped
 
 from plc_seam_interfaces.srv import GetTarget
+from plc_seam import envelope
 
 
 class SimTargetSource(Node):
@@ -29,7 +32,7 @@ class SimTargetSource(Node):
         self.declare_parameter('targets_before_exhausted', 5)
         # Floor for the vertical axis, in METRES. The simulator can report a
         # point below the reachable volume; clamp rather than command it.
-        self.declare_parameter('z_min_m', -1.02)
+        self.declare_parameter('z_min_m', envelope.load()['z'][0])
 
         self._latest = None
         self._served = 0
@@ -48,7 +51,7 @@ class SimTargetSource(Node):
 
     def on_request(self, request, response):
         if self._latest is None:
-            self.get_logger().warn('No simulator target received yet')
+            self.get_logger().warn('No new simulator target to serve')
             return response
 
         limit = self.get_parameter('targets_before_exhausted').value
@@ -57,7 +60,7 @@ class SimTargetSource(Node):
             response.source_exhausted = True
             return response
 
-        response.target = self._latest
+        response.target, self._latest = self._latest, None
         response.target.header.stamp = self.get_clock().now().to_msg()
         if not response.target.header.frame_id:
             response.target.header.frame_id = self.get_parameter('frame_id').value

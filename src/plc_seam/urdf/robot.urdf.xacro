@@ -16,6 +16,10 @@
 
   <xacro:include filename="$(find plc_seam)/urdf/plc_ros2_control.xacro"/>
 
+  <!-- The working window, metres: the one definition, shared with the nodes. -->
+  <xacro:property name="envelope"
+                  value="${xacro.load_yaml('$(find plc_seam)/config/envelope.yaml')}"/>
+
   <xacro:macro name="box_link" params="name size rgba">
     <link name="${name}">
       <visual>
@@ -46,11 +50,14 @@
   <!-- Measured axes, metres (REP-103). The PLC's setpoints are millimetres:
        plc_bridge_node converts once, at the boundary. -->
   <xacro:axis name="x_joint" parent="base_link" child="x_carriage"
-              xyz="0 0 0" axis="1 0 0" lower="0.0" upper="0.75"/>
+              xyz="0 0 0" axis="1 0 0"
+              lower="${envelope['x'][0]}" upper="${envelope['x'][1]}"/>
   <xacro:axis name="y_joint" parent="x_carriage" child="y_carriage"
-              xyz="0 0 0" axis="0 1 0" lower="0.0" upper="0.55"/>
+              xyz="0 0 0" axis="0 1 0"
+              lower="${envelope['y'][0]}" upper="${envelope['y'][1]}"/>
   <xacro:axis name="z_joint" parent="y_carriage" child="z_ram"
-              xyz="0 0 0" axis="0 0 1" lower="-1.02" upper="-0.40"/>
+              xyz="0 0 0" axis="0 0 1"
+              lower="${envelope['z'][0]}" upper="${envelope['z'][1]}"/>
   <xacro:axis name="gripper_left_joint" parent="z_ram" child="gripper_left"
               xyz="0 0 -0.35" axis="-1 0 0" lower="0.0" upper="0.04"/>
   <xacro:axis name="gripper_right_joint" parent="z_ram" child="gripper_right"

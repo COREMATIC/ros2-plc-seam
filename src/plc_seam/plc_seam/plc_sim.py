@@ -41,7 +41,8 @@ from std_msgs.msg import Float64MultiArray
 
 from plc_seam.handshake import (
     GPIO_COMMANDS, GPIO_STATES, GPIOS, SETPOINT_COMMANDS, WRITTEN_BY_ROS)
-from plc_seam.units import mm_to_m
+from plc_seam import envelope
+from plc_seam.units import m_to_mm, mm_to_m
 
 JOINTS = ('x_joint', 'y_joint', 'z_joint',
           'transfer_joint', 'gripper_left_joint', 'gripper_right_joint')
@@ -167,11 +168,12 @@ class PlcSim(Node):
 
     def __init__(self):
         super().__init__('plc_sim')
-        # Working window in MILLIMETRES, the PLC's own limits. A setpoint
-        # outside it is refused, whatever the target source said.
-        self.declare_parameter('x_window_mm', [0.0, 750.0])
-        self.declare_parameter('y_window_mm', [0.0, 550.0])
-        self.declare_parameter('z_window_mm', [-1020.0, -400.0])
+        # The PLC's own working window, in METRES like every ROS parameter;
+        # config/envelope.yaml by default. A setpoint outside it is refused,
+        # whatever the target source said.
+        window = envelope.load()
+        for axis in envelope.AXES:
+            self.declare_parameter(f'{axis}_window_m', list(window[axis]))
         self.declare_parameter('speed_mm_s', 500.0)
         self.declare_parameter('refill_s', 3.0)
         self.declare_parameter('request_timeout_s', 5.0)
@@ -181,7 +183,9 @@ class PlcSim(Node):
             return self.get_parameter(name).value
 
         self.model = PlcModel(
-            window_mm=(p('x_window_mm'), p('y_window_mm'), p('z_window_mm')),
+            # The PLC's limits are in its units: convert once, here.
+            window_mm=tuple(tuple(m_to_mm(v) for v in p(f'{axis}_window_m'))
+                            for axis in envelope.AXES),
             speed_mm_s=p('speed_mm_s'), refill_s=p('refill_s'),
             request_timeout_s=p('request_timeout_s'))
         self._dt = 1.0 / p('rate_hz')

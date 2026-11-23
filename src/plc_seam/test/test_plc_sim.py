@@ -4,9 +4,11 @@ Pure state-machine tests: no ROS graph. The bridge's side is played by hand,
 the way plc_bridge_node.py plays it.
 """
 
+from plc_seam import envelope
 from plc_seam.plc_sim import PlcModel
+from plc_seam.units import m_to_mm
 
-WINDOW = ((0.0, 750.0), (0.0, 550.0), (-1020.0, -400.0))
+WINDOW = tuple(tuple(m_to_mm(v) for v in envelope.load()[axis]) for axis in envelope.AXES)
 DT = 0.025
 
 
