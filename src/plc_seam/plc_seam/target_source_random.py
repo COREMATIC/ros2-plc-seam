@@ -36,7 +36,6 @@ class RandomTargetSource(Node):
         limit = self.get_parameter('targets_before_exhausted').value
         if limit > 0 and self._served >= limit:
             self._served = 0
-            response.success = False
             response.source_exhausted = True
             self.get_logger().info('Source exhausted; resetting')
             return response
@@ -51,7 +50,6 @@ class RandomTargetSource(Node):
         response.target.point.y = random.uniform(*yr)
         response.target.point.z = random.uniform(*zr)
         response.success = True
-        response.source_exhausted = False
 
         self._served += 1
         return response

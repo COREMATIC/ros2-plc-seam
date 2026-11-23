@@ -16,6 +16,7 @@ Run with:  colcon test --packages-select plc_seam
 import pytest
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
+from geometry_msgs.msg import PointStamped
 
 from plc_seam_interfaces.srv import GetTarget
 from plc_seam.target_source_random import RandomTargetSource
@@ -48,23 +49,24 @@ def _call_service(node, timeout_s=5.0):
         client_node.destroy_node()
 
 
-def _make_sources():
-    """Every implementation of the seam. Add new ones here, not in the tests."""
+def _seeded_sim():
     sim = SimTargetSource()
-    from geometry_msgs.msg import PointStamped
     seed = PointStamped()
     seed.header.frame_id = 'base_link'
     seed.point.x, seed.point.y, seed.point.z = 0.42, 0.31, -0.80
     sim.on_sim_point(seed)
+    return sim
 
-    return [
-        ('random', RandomTargetSource()),
-        ('sim', sim),
-        # Camera source with a stubbed detector returning MILLIMETRES, which is
-        # what a depth driver actually hands you. If the node forgets to convert,
-        # the magnitude assertion below fails.
-        ('camera', CameraTargetSource(detector=lambda: (420.0, 310.0, -800.0))),
-    ]
+
+# Every implementation of the seam. Add new ones here, not in the tests.
+SOURCES = {
+    'random': RandomTargetSource,
+    'sim': _seeded_sim,
+    # Camera source with a stubbed detector returning MILLIMETRES, which is
+    # what a depth driver actually hands you. If the node forgets to convert,
+    # the magnitude assertion below fails.
+    'camera': lambda: CameraTargetSource(detector=lambda: (420.0, 310.0, -800.0)),
+}
 
 
 @pytest.fixture(scope='module', autouse=True)
@@ -74,10 +76,11 @@ def ros():
     rclpy.shutdown()
 
 
-@pytest.mark.parametrize('name', ['random', 'sim'])
+# The camera source needs a TF tree from its frame to base_link, which this test does not publish.
+@pytest.mark.parametrize('name', [n for n in SOURCES if n != 'camera'])
 def test_target_is_stamped_and_plausible_in_metres(name):
     """The response must be usable by TF and must be in SI units."""
-    source = dict(_make_sources())[name]
+    source = SOURCES[name]()
     try:
         response = _call_service(source)
 
@@ -126,9 +129,9 @@ def test_every_implementation_is_covered():
         m.name for m in pkgutil.iter_modules(plc_seam.__path__)
         if m.name.startswith('target_source_')
     }
-    covered = {f'target_source_{name}' for name, _ in _make_sources()}
+    covered = {f'target_source_{name}' for name in SOURCES}
     missing = modules - covered
     assert not missing, (
         f'target sources with no contract coverage: {sorted(missing)}. '
-        f'Add them to _make_sources().'
+        f'Add them to SOURCES.'
     )

@@ -35,13 +35,10 @@ from std_msgs.msg import Float64MultiArray
 from control_msgs.msg import DynamicInterfaceGroupValues, InterfaceValue
 
 from plc_seam_interfaces.srv import GetTarget
+from plc_seam.handshake import (
+    EMPTY_ACK, GPIO_COMMANDS, GPIO_STATES, REQUEST_TARGET, SETPOINT_COMMANDS,
+    SOURCE_EMPTY, TARGET_READY)
 from plc_seam.units import xyz_m_to_mm
-
-# GPIO names as declared in the ros2_control xacro.
-REQUEST_TARGET = 'request_target'
-TARGET_READY = 'target_ready'
-SOURCE_EMPTY = 'source_empty'
-EMPTY_ACK = 'empty_ack'
 
 
 class PlcBridge(Node):
@@ -49,18 +46,16 @@ class PlcBridge(Node):
     def __init__(self):
         super().__init__('plc_bridge')
 
-        self.declare_parameter('service_timeout_s', 5.0)
-
         self._prev_request = 0.0
         self._in_flight = False
+        self._source_empty = False          # we raised source_empty, no ack yet
 
         self._cmd_pub = self.create_publisher(
-            Float64MultiArray, '/forward_command/commands', 10)
+            Float64MultiArray, SETPOINT_COMMANDS, 10)
         self._gpio_pub = self.create_publisher(
-            DynamicInterfaceGroupValues, '/gpio_command/commands', 10)
+            DynamicInterfaceGroupValues, GPIO_COMMANDS, 10)
         self.create_subscription(
-            DynamicInterfaceGroupValues, '/gpio_command/gpio_states',
-            self.on_gpio_states, 10)
+            DynamicInterfaceGroupValues, GPIO_STATES, self.on_gpio_states, 10)
 
         self._client = self.create_client(GetTarget, 'get_target')
         self.get_logger().info('PLC bridge ready; waiting for machine requests')
@@ -103,7 +98,8 @@ class PlcBridge(Node):
 
         self._prev_request = request
 
-        if self._read_gpio(msg, EMPTY_ACK) == 1.0:
+        if self._source_empty and self._read_gpio(msg, EMPTY_ACK) == 1.0:
+            self._source_empty = False
             self._set_gpio(SOURCE_EMPTY, 0.0)
 
     def request_target(self):
@@ -124,6 +120,7 @@ class PlcBridge(Node):
 
         if response.source_exhausted:
             self.get_logger().warn('Source exhausted; signalling the machine')
+            self._source_empty = True
             self._set_gpio(SOURCE_EMPTY, 1.0)
             return
 

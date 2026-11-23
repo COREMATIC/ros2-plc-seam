@@ -49,14 +49,11 @@ class SimTargetSource(Node):
     def on_request(self, request, response):
         if self._latest is None:
             self.get_logger().warn('No simulator target received yet')
-            response.success = False
-            response.source_exhausted = False
             return response
 
         limit = self.get_parameter('targets_before_exhausted').value
         if limit > 0 and self._served >= limit:
             self._served = 0
-            response.success = False
             response.source_exhausted = True
             return response
 
@@ -65,7 +62,6 @@ class SimTargetSource(Node):
         if not response.target.header.frame_id:
             response.target.header.frame_id = self.get_parameter('frame_id').value
         response.success = True
-        response.source_exhausted = False
 
         self._served += 1
         return response

@@ -5,14 +5,14 @@
 #   tools/fetch_ads_driver.sh            # clones next to this repository, in the workspace's src/
 #   tools/fetch_ads_driver.sh DIR        # clones into DIR
 #
-# Then build the workspace with colcon as usual. To move to another driver commit, delete the
-# local branch (git -C .../beckhoff_ads_driver branch -D plc_seam_fixes) and change the pin.
+# Then build the workspace with colcon as usual. Each run rebuilds the local branch from the pin
+# and the patches, so a changed pin or patch takes effect on the next run.
 set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 dest="${1:-$(dirname "$repo")}"
 
 DRIVER_URL=https://github.com/b-robotized/beckhoff_ads_driver.git
-DRIVER_COMMIT=5aa1f59e6b7428f7ef868d67a6b8ab06f666f3a4    # rolling, 23 February 2026
+DRIVER_COMMIT=5aa1f59e6b7428f7ef868d67a6b8ab06f666f3a4    # head of rolling on 22 November 2026
 # The driver's jazzy repos file asks for an ads_vendor "jazzy" branch, which does not exist.
 VENDOR_URL=https://github.com/b-robotized/ads_vendor.git
 VENDOR_COMMIT=e18e45cf281bca74cdafeddbddd5248107597586    # rolling, tag 1.0.2
@@ -25,15 +25,10 @@ clone_at() {   # dir url commit
 
 driver="$dest/beckhoff_ads_driver"
 clone_at "$driver" "$DRIVER_URL" "$DRIVER_COMMIT"
-if git -C "$driver" rev-parse --quiet --verify "refs/heads/$BRANCH" >/dev/null; then
-    git -C "$driver" checkout --quiet "$BRANCH"
-    echo "driver fixes already applied (branch $BRANCH)"
-else
-    git -C "$driver" checkout --quiet -b "$BRANCH" "$DRIVER_COMMIT"
-    git -C "$driver" -c user.name=plc_seam -c user.email=plc_seam@localhost \
-        am --quiet "$repo"/patches/beckhoff_ads_driver/*.patch
-    echo "driver at ${DRIVER_COMMIT:0:7} with $(ls "$repo"/patches/beckhoff_ads_driver/*.patch | wc -l) fixes (branch $BRANCH)"
-fi
+git -C "$driver" checkout --quiet -B "$BRANCH" "$DRIVER_COMMIT"
+git -C "$driver" -c user.name=plc_seam -c user.email=plc_seam@localhost \
+    am --quiet "$repo"/patches/beckhoff_ads_driver/*.patch
+echo "driver at ${DRIVER_COMMIT:0:7} with $(ls "$repo"/patches/beckhoff_ads_driver/*.patch | wc -l) fixes (branch $BRANCH)"
 
 vendor="$dest/ads_vendor"
 clone_at "$vendor" "$VENDOR_URL" "$VENDOR_COMMIT"

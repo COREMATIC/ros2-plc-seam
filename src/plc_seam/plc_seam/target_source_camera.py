@@ -48,8 +48,6 @@ class CameraTargetSource(Node):
         reading_mm = self._detector() if self._detector else None
         if reading_mm is None:
             self.get_logger().warn('No valid detection this cycle')
-            response.success = False
-            response.source_exhausted = False
             return response
 
         in_camera = PointStamped()
@@ -66,13 +64,10 @@ class CameraTargetSource(Node):
                 base_frame, in_camera.header.frame_id, rclpy.time.Time())
         except tf2_ros.TransformException as exc:
             self.get_logger().error(f'Could not transform target: {exc}')
-            response.success = False
-            response.source_exhausted = False
             return response
 
         response.target = tf2_geometry_msgs.do_transform_point(in_camera, transform)
         response.success = True
-        response.source_exhausted = False
         return response
 
 

@@ -39,12 +39,10 @@ from control_msgs.msg import DynamicInterfaceGroupValues, InterfaceValue
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 
+from plc_seam.handshake import (
+    GPIO_COMMANDS, GPIO_STATES, GPIOS, SETPOINT_COMMANDS, WRITTEN_BY_ROS)
 from plc_seam.units import mm_to_m
 
-# The handshake, as declared in urdf/plc_ros2_control.xacro.
-GPIOS = ('request_target', 'target_ready', 'source_empty',
-         'empty_ack', 'picking', 'placing')
-WRITTEN_BY_ROS = ('target_ready', 'source_empty')
 JOINTS = ('x_joint', 'y_joint', 'z_joint',
           'transfer_joint', 'gripper_left_joint', 'gripper_right_joint')
 
@@ -112,6 +110,7 @@ class PlcModel:
 
     def step(self, dt):
         g = self.gpio
+        self._timer -= dt                   # only the timed states read it
         if self.state == 'request':
             if g['source_empty'] == 1.0:
                 g['request_target'] = 0.0
@@ -125,14 +124,11 @@ class PlcModel:
                 else:
                     self.refused += 1
                     self.state, self._timer = 'retry', self.retry_s
-            else:
-                self._timer -= dt
-                if self._timer <= 0.0:          # the watchdog: ask again
-                    self.timeouts += 1
-                    g['request_target'] = 0.0
-                    self.state, self._timer = 'retry', self.retry_s
+            elif self._timer <= 0.0:            # the watchdog: ask again
+                self.timeouts += 1
+                g['request_target'] = 0.0
+                self.state, self._timer = 'retry', self.retry_s
         elif self.state == 'retry':
-            self._timer -= dt
             if self._timer <= 0.0 and g['target_ready'] == 0.0:
                 self._ask()
         elif self.state == 'pick':
@@ -145,7 +141,6 @@ class PlcModel:
             if self._move(dt):
                 self.state, self._timer = 'release', self.place_s
         elif self.state == 'release':
-            self._timer -= dt
             if self._timer <= 0.0:
                 self.holding = False
                 g['placing'] = 0.0
@@ -155,7 +150,6 @@ class PlcModel:
                 else:
                     self.state = 'retry'
         elif self.state == 'refill':
-            self._timer -= dt
             if self._timer <= 0.0:
                 g['empty_ack'] = 1.0        # an operator refilled the source
             if g['empty_ack'] == 1.0 and g['source_empty'] == 0.0:
@@ -193,14 +187,14 @@ class PlcSim(Node):
         self._dt = 1.0 / p('rate_hz')
 
         self._gpio_pub = self.create_publisher(
-            DynamicInterfaceGroupValues, '/gpio_command/gpio_states', 10)
+            DynamicInterfaceGroupValues, GPIO_STATES, 10)
         self._joint_pub = self.create_publisher(JointState, '/joint_states', 10)
         self.create_subscription(
-            DynamicInterfaceGroupValues, '/gpio_command/commands', self.on_gpio, 10)
+            DynamicInterfaceGroupValues, GPIO_COMMANDS, self.on_gpio, 10)
         self.create_subscription(
-            Float64MultiArray, '/forward_command/commands', self.on_setpoint, 10)
+            Float64MultiArray, SETPOINT_COMMANDS, self.on_setpoint, 10)
         self.create_timer(self._dt, self.tick)
-        self._last = (0, 0, 0)
+        self._logged = {'picks': 0, 'refused': 0, 'timeouts': 0}
         self.get_logger().info('PLC stand-in running: no machine connected')
 
     def on_gpio(self, msg):
@@ -212,17 +206,20 @@ class PlcSim(Node):
         if len(msg.data) == 3:
             self.model.on_setpoint(msg.data)
 
+    def _changed(self, counter):
+        value = getattr(self.model, counter)
+        changed, self._logged[counter] = value != self._logged[counter], value
+        return changed
+
     def tick(self):
         self.model.step(self._dt)
         m = self.model
-        if (m.picks, m.refused, m.timeouts) != self._last:
-            if m.refused != self._last[1]:
-                self.get_logger().warn('Setpoint outside the working window: refused')
-            elif m.timeouts != self._last[2]:
-                self.get_logger().warn('No valid target in time: asking again')
-            else:
-                self.get_logger().info(f'Pick {m.picks} done')
-            self._last = (m.picks, m.refused, m.timeouts)
+        if self._changed('refused'):
+            self.get_logger().warn('Setpoint outside the working window: refused')
+        if self._changed('timeouts'):
+            self.get_logger().warn('No valid target in time: asking again')
+        if self._changed('picks'):
+            self.get_logger().info(f'Pick {m.picks} done')
 
         now = self.get_clock().now().to_msg()
         states = DynamicInterfaceGroupValues()
