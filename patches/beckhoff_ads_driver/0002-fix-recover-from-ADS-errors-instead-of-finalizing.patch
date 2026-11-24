@@ -1,0 +1,189 @@
+From 5f99beb120a6696f518c4a90abf747e35251e70a Mon Sep 17 00:00:00 2001
+From: Renaud Bouckenooghe <renaud.bouckenooghe@corematic.eu>
+Date: Sun, 22 Nov 2026 02:24:45 +0000
+Subject: [PATCH 2/5] fix: recover from ADS errors instead of finalizing
+
+- Keep the symbol handles alive until cleanup. *GetHandle() kept only the
+  number: the temporary AdsHandle released the handle on the PLC at the end
+  of the statement, so sum reads and writes used released handles.
+- on_error releases the connection and returns SUCCESS. The component goes
+  back to UNCONFIGURED and can be configured and activated again, instead
+  of FINALIZED (the default), which needs a controller manager restart.
+- on_cleanup releases the connection.
+- on_configure can run again: the instruction vectors are rebuilt, not
+  appended to, and a previous connection is released first.
+
+After a link loss or a PLC restart, set_hardware_component_state to active
+reconnects and takes new handles, without restarting the process.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../beckhoff_ads_hardware_interface.hpp       | 11 +++
+ .../src/beckhoff_ads_hardware_interface.cpp   | 72 +++++++++++++------
+ 2 files changed, 61 insertions(+), 22 deletions(-)
+
+diff --git a/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp b/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp
+index 5d48fdc..9bc60c8 100644
+--- a/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp
++++ b/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp
+@@ -110,6 +110,12 @@ namespace beckhoff_ads_hardware_interface
+     hardware_interface::CallbackReturn on_deactivate(
+         const rclcpp_lifecycle::State &previous_state) override;
+ 
++    hardware_interface::CallbackReturn on_cleanup(
++        const rclcpp_lifecycle::State &previous_state) override;
++
++    hardware_interface::CallbackReturn on_error(
++        const rclcpp_lifecycle::State &previous_state) override;
++
+     hardware_interface::CallbackReturn on_shutdown(
+         const rclcpp_lifecycle::State &previous_state) override;
+ 
+@@ -133,7 +139,12 @@ namespace beckhoff_ads_hardware_interface
+ 
+     // ADS Communication objects
+     std::unique_ptr<AdsDevice> ads_device_; // Manages the route/connection to the PLC
++    // Owns the symbol handles: an AdsHandle releases its handle on the PLC when destroyed, so a handle
++    // used by the sum commands must live as long as the connection. Declared after ads_device_ so it is
++    // destroyed first (its deleters call into the device).
++    std::vector<AdsHandle> ads_handles_;
+     bool configure_ads_device();
++    void release_ads_device(bool release_handles_on_plc);
+ 
+     // Metadata (populated in on interface export)
+     // Describes each variable on the PLC
+diff --git a/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp b/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
+index 5bc191e..1bf320b 100644
+--- a/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
++++ b/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
+@@ -44,26 +44,20 @@ namespace beckhoff_ads_hardware_interface
+ 
+         // Request handles for all symbolic PLC variable names
+         RCLCPP_INFO(getLogger(), "Fetching ADS handles for configured PLC variables...");
+-        for (auto &layout : ads_item_layouts_read_)
++        ads_handles_.clear();
++        for (auto *layouts : {&ads_item_layouts_read_, &ads_item_layouts_write_})
+         {
+-            try
+-            {
+-                layout.ads_handle = *(ads_device_->GetHandle(layout.plc_name_symbolic));
+-            }
+-            catch (const std::exception &ex)
++            for (auto &layout : *layouts)
+             {
+-                RCLCPP_ERROR(getLogger(), "\tADS Exception getting handle for '%s': %s. Read operations for this variable will fail.", layout.plc_name_symbolic.c_str(), ex.what());
+-            }
+-        }
+-        for (auto &layout : ads_item_layouts_write_)
+-        {
+-            try
+-            {
+-                layout.ads_handle = *(ads_device_->GetHandle(layout.plc_name_symbolic));
+-            }
+-            catch (const std::exception &ex)
+-            {
+-                RCLCPP_ERROR(getLogger(), "\tADS Exception getting handle for '%s': %s. Write operations for this variable will fail.", layout.plc_name_symbolic.c_str(), ex.what());
++                try
++                {
++                    ads_handles_.push_back(ads_device_->GetHandle(layout.plc_name_symbolic));
++                    layout.ads_handle = *ads_handles_.back();
++                }
++                catch (const std::exception &ex)
++                {
++                    RCLCPP_ERROR(getLogger(), "\tADS Exception getting handle for '%s': %s. Operations on this variable will fail.", layout.plc_name_symbolic.c_str(), ex.what());
++                }
+             }
+         }
+         RCLCPP_INFO(getLogger(), "\tHandles acquired");
+@@ -104,6 +98,7 @@ namespace beckhoff_ads_hardware_interface
+     bool BeckhoffADSHardwareInterface::build_sum_read_buffers()
+     {
+         num_items_read_ = ads_item_layouts_read_.size();
++        ads_read_instructions_.clear();  // on_configure runs again after an error: rebuild, do not append
+         if (num_items_read_ == 0)
+         {
+             RCLCPP_INFO(getLogger(), "No items to configure for ADS Sum READ.");
+@@ -162,6 +157,7 @@ namespace beckhoff_ads_hardware_interface
+     {
+         RCLCPP_INFO(getLogger(), "Building ADS sum WRITE buffer...");
+         num_items_write_ = ads_item_layouts_write_.size();
++        ads_write_instructions_.clear();
+         if (num_items_write_ == 0)
+         {
+             RCLCPP_INFO(getLogger(), "No items to configure for ADS Sum WRITE.");
+@@ -409,6 +405,38 @@ namespace beckhoff_ads_hardware_interface
+         return CallbackReturn::SUCCESS;
+     }
+ 
++    hardware_interface::CallbackReturn BeckhoffADSHardwareInterface::on_cleanup(
++        const rclcpp_lifecycle::State & /*previous_state*/)
++    {
++        release_ads_device(true);
++        return CallbackReturn::SUCCESS;
++    }
++
++    hardware_interface::CallbackReturn BeckhoffADSHardwareInterface::on_error(
++        const rclcpp_lifecycle::State & /*previous_state*/)
++    {
++        // A read or write failed (link lost, PLC restarted, handles invalid). Drop the connection and
++        // return to UNCONFIGURED, so the component can be configured and activated again. The default
++        // on_error fails, which FINALIZES the component until the controller manager restarts.
++        RCLCPP_ERROR(getLogger(), "ADS communication error: connection released, the component can be configured again.");
++        release_ads_device(false);
++        return CallbackReturn::SUCCESS;
++    }
++
++    void BeckhoffADSHardwareInterface::release_ads_device(bool release_handles_on_plc)
++    {
++        if (!release_handles_on_plc)
++        {
++            // The link may be dead: releasing each handle would block for one timeout per handle.
++            for (auto &handle : ads_handles_)
++            {
++                delete handle.release();
++            }
++        }
++        ads_handles_.clear();  // otherwise releases the handles on the PLC while the device exists
++        ads_device_.reset();
++    }
++
+     hardware_interface::return_type BeckhoffADSHardwareInterface::read(
+         const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
+     {
+@@ -699,10 +727,7 @@ namespace beckhoff_ads_hardware_interface
+         const rclcpp_lifecycle::State & /*previous_state*/)
+     {
+         RCLCPP_INFO(getLogger(), "Releasing ADS resources...");
+-        if (ads_device_)
+-        {
+-            ads_device_.reset();
+-        }
++        release_ads_device(true);
+         RCLCPP_INFO(getLogger(), "ADS resources released.");
+ 
+         return hardware_interface::CallbackReturn::SUCCESS;
+@@ -712,6 +737,7 @@ namespace beckhoff_ads_hardware_interface
+     {
+         RCLCPP_INFO(getLogger(), "Configuring ADS device...");
+         const auto &params = info_.hardware_parameters;
++        release_ads_device(false);  // a previous connection, if configure runs again
+         try
+         {
+             std::string plc_ip = params.at("plc_ip_address");
+@@ -756,11 +782,13 @@ namespace beckhoff_ads_hardware_interface
+         catch (const AdsException &ex)
+         {
+             RCLCPP_FATAL(getLogger(), "\tADS Exception during connection: %s (Error Code: 0x%lX)", ex.what(), ex.errorCode);
++            release_ads_device(false);
+             return false;
+         }
+         catch (const std::exception &ex)
+         {
+             RCLCPP_FATAL(getLogger(), "\tError during ADS connection config: %s", ex.what());
++            release_ads_device(false);
+             return false;
+         }
+ 
+-- 
+2.43.0
+

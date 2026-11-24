@@ -1,0 +1,98 @@
+<?xml version="1.0"?>
+<!--
+  Binding a PLC to ros2_control.
+
+  The hardware-interface abstraction is nearly always presented in terms of
+  motor drivers. It maps onto a PLC cleanly: a SystemInterface plugin holds one
+  fieldbus connection and binds ROS interfaces to controller symbols.
+
+  Two macros keep the repetition out of the robot description, so adding a PLC
+  variable is one line rather than fifteen:
+
+    plc_joint  - position state (and optionally command) bound to symbols
+    plc_gpio   - a boolean process signal bound to a symbol
+
+  NOTE ON UNITS. The state symbols below carry the unit in their NAME
+  (..._m). That is deliberate: a ros2_control interface has no unit, so the
+  only place the contract can live is the name and the documentation. See
+  plc_seam/units.py.
+
+  Symbol names here are neutral examples following IEC 61131 conventions.
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- A boolean process signal.
+       read_only=1 -> the machine owns it, ROS only observes. -->
+  <xacro:macro name="plc_gpio" params="name symbol read_only:=1">
+    <gpio name="${name}">
+      <state_interface name="state">
+        <param name="PLC_symbol">${symbol}</param>
+        <param name="PLC_type">BOOL</param>
+      </state_interface>
+      <xacro:if value="${read_only != 1}">
+        <command_interface name="command">
+          <param name="PLC_symbol">${symbol}</param>
+          <param name="PLC_type">BOOL</param>
+        </command_interface>
+      </xacro:if>
+    </gpio>
+  </xacro:macro>
+
+  <!-- An axis. state_symbol is the measured position; cmd_symbol is the
+       setpoint the machine reads. Omit cmd_symbol for observed-only axes. -->
+  <xacro:macro name="plc_joint" params="name state_symbol cmd_symbol:='' read_only:=1">
+    <joint name="${name}">
+      <state_interface name="position">
+        <param name="PLC_symbol">${state_symbol}</param>
+        <param name="PLC_type">LREAL</param>
+      </state_interface>
+      <xacro:if value="${read_only != 1}">
+        <command_interface name="position">
+          <param name="PLC_symbol">${cmd_symbol}</param>
+          <param name="PLC_type">LREAL</param>
+        </command_interface>
+      </xacro:if>
+    </joint>
+  </xacro:macro>
+
+  <!-- The plugin is b»robotized's open-source Beckhoff ADS driver:
+       https://github.com/b-robotized/beckhoff_ads_driver -->
+  <xacro:macro name="plc_ros2_control"
+               params="name plc_ip_address plc_ams_net_id local_ams_net_id plc_ams_port:=851">
+    <ros2_control name="${name}" type="system">
+
+      <hardware>
+        <plugin>beckhoff_ads_hardware_interface/BeckhoffADSHardwareInterface</plugin>
+        <!-- Parameters are NETWORK settings, not motor gains. Swapping them at
+             launch moves the same stack between a local subnet and a tunnel. -->
+        <param name="plc_ip_address">${plc_ip_address}</param>
+        <param name="plc_ams_net_id">${plc_ams_net_id}</param>
+        <param name="plc_ams_port">${plc_ams_port}</param>
+        <param name="local_ams_net_id">${local_ams_net_id}</param>
+      </hardware>
+
+      <!-- Commandable axes -->
+      <xacro:plc_joint name="x_joint" state_symbol="MAIN.lrAxisX_m"
+                       cmd_symbol="GVL.lrTargetX" read_only="0"/>
+      <xacro:plc_joint name="y_joint" state_symbol="MAIN.lrAxisY_m"
+                       cmd_symbol="GVL.lrTargetY" read_only="0"/>
+      <xacro:plc_joint name="z_joint" state_symbol="MAIN.lrAxisZ_m"
+                       cmd_symbol="GVL.lrTargetZ" read_only="0"/>
+
+      <!-- Observed only: the machine owns these entirely -->
+      <xacro:plc_joint name="transfer_joint" state_symbol="MAIN.lrTransfer_m"/>
+      <xacro:plc_joint name="gripper_left_joint" state_symbol="GVL.lrGripperLeft"/>
+      <xacro:plc_joint name="gripper_right_joint" state_symbol="GVL.lrGripperRight"/>
+
+      <!-- The handshake. Names match plc_bridge_node.py. -->
+      <xacro:plc_gpio name="request_target" symbol="GVL.bRequestTarget"/>
+      <xacro:plc_gpio name="empty_ack"      symbol="GVL.bEmptyAck"/>
+      <xacro:plc_gpio name="picking"        symbol="GVL.bPicking"/>
+      <xacro:plc_gpio name="placing"        symbol="GVL.bPlacing"/>
+      <xacro:plc_gpio name="target_ready"   symbol="GVL.bTargetReady" read_only="0"/>
+      <xacro:plc_gpio name="source_empty"   symbol="GVL.bSourceEmpty" read_only="0"/>
+
+    </ros2_control>
+  </xacro:macro>
+
+</robot>

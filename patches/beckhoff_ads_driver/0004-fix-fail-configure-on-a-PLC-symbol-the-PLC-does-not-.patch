@@ -1,0 +1,53 @@
+From 2534bfbff630efa2d47da89388385f5214dbed3f Mon Sep 17 00:00:00 2001
+From: Renaud Bouckenooghe <renaud.bouckenooghe@corematic.eu>
+Date: Sun, 22 Nov 2026 02:24:46 +0000
+Subject: [PATCH 4/5] fix: fail configure on a PLC symbol the PLC does not know
+
+A wrong PLC_symbol name was logged once at configure, then failed the
+whole sum read or write on every cycle. Now on_configure fails and names
+each unknown symbol, so the mistake shows before anything runs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../src/beckhoff_ads_hardware_interface.cpp         | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp b/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
+index d666084..2de601d 100644
+--- a/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
++++ b/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
+@@ -42,9 +42,11 @@ namespace beckhoff_ads_hardware_interface
+         ads_read_layout_configure();
+         ads_write_layout_configure();
+ 
+-        // Request handles for all symbolic PLC variable names
++        // Request handles for all symbolic PLC variable names. A symbol the PLC does not know fails the
++        // configuration here, by name: left in the sum read, it would fail every cycle instead.
+         RCLCPP_INFO(getLogger(), "Fetching ADS handles for configured PLC variables...");
+         ads_handles_.clear();
++        bool all_handles = true;
+         for (auto *layouts : {&ads_item_layouts_read_, &ads_item_layouts_write_})
+         {
+             for (auto &layout : *layouts)
+@@ -56,10 +58,17 @@ namespace beckhoff_ads_hardware_interface
+                 }
+                 catch (const std::exception &ex)
+                 {
+-                    RCLCPP_ERROR(getLogger(), "\tADS Exception getting handle for '%s': %s. Operations on this variable will fail.", layout.plc_name_symbolic.c_str(), ex.what());
++                    RCLCPP_ERROR(getLogger(), "\tNo ADS handle for '%s': %s.", layout.plc_name_symbolic.c_str(), ex.what());
++                    all_handles = false;
+                 }
+             }
+         }
++        if (!all_handles)
++        {
++            RCLCPP_FATAL(getLogger(), "Unknown PLC symbols: check the PLC_symbol names against the TwinCAT project.");
++            release_ads_device(true);
++            return hardware_interface::CallbackReturn::ERROR;
++        }
+         RCLCPP_INFO(getLogger(), "\tHandles acquired");
+ 
+         // Pre-pack what we can for SUM read/write commands
+-- 
+2.43.0
+

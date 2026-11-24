@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<!--
+  A neutral gantry: three prismatic axes, a transfer axis and a two-jaw gripper.
+  Just enough geometry for TF and RViz; the PLC binding is in plc_ros2_control.xacro.
+
+  Arguments (only used with plc:=ads, by ros2_control_node):
+    plc_ip_address    the PLC's IP address
+    plc_ams_net_id    the PLC's AMS Net ID
+    local_ams_net_id  this computer's AMS Net ID (add a matching route on the PLC)
+-->
+<robot name="gantry" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="plc_ip_address" default="192.168.0.10"/>
+  <xacro:arg name="plc_ams_net_id" default="192.168.0.10.1.1"/>
+  <xacro:arg name="local_ams_net_id" default="192.168.0.20.1.1"/>
+
+  <xacro:include filename="$(find plc_seam)/urdf/plc_ros2_control.xacro"/>
+
+  <!-- The working window, metres: the one definition, shared with the nodes. -->
+  <xacro:property name="envelope"
+                  value="${xacro.load_yaml('$(find plc_seam)/config/envelope.yaml')}"/>
+
+  <xacro:macro name="box_link" params="name size rgba">
+    <link name="${name}">
+      <visual>
+        <geometry><box size="${size}"/></geometry>
+        <material name="${name}_color"><color rgba="${rgba}"/></material>
+      </visual>
+    </link>
+  </xacro:macro>
+
+  <xacro:macro name="axis" params="name parent child xyz axis lower upper">
+    <joint name="${name}" type="prismatic">
+      <parent link="${parent}"/>
+      <child link="${child}"/>
+      <origin xyz="${xyz}"/>
+      <axis xyz="${axis}"/>
+      <limit lower="${lower}" upper="${upper}" effort="1000" velocity="0.5"/>
+    </joint>
+  </xacro:macro>
+
+  <link name="base_link"/>
+  <xacro:box_link name="x_carriage" size="0.10 0.80 0.08" rgba="0.6 0.6 0.6 1"/>
+  <xacro:box_link name="y_carriage" size="0.14 0.14 0.10" rgba="0.6 0.6 0.6 1"/>
+  <xacro:box_link name="z_ram" size="0.06 0.06 0.60" rgba="1.0 0.74 0.0 1"/>
+  <xacro:box_link name="gripper_left" size="0.02 0.06 0.10" rgba="0.2 0.2 0.2 1"/>
+  <xacro:box_link name="gripper_right" size="0.02 0.06 0.10" rgba="0.2 0.2 0.2 1"/>
+  <xacro:box_link name="transfer_carriage" size="0.20 0.20 0.05" rgba="0.4 0.4 0.4 1"/>
+
+  <!-- Measured axes, metres (REP-103). The PLC's setpoints are millimetres:
+       plc_bridge_node converts once, at the boundary. -->
+  <xacro:axis name="x_joint" parent="base_link" child="x_carriage"
+              xyz="0 0 0" axis="1 0 0"
+              lower="${envelope['x'][0]}" upper="${envelope['x'][1]}"/>
+  <xacro:axis name="y_joint" parent="x_carriage" child="y_carriage"
+              xyz="0 0 0" axis="0 1 0"
+              lower="${envelope['y'][0]}" upper="${envelope['y'][1]}"/>
+  <xacro:axis name="z_joint" parent="y_carriage" child="z_ram"
+              xyz="0 0 0" axis="0 0 1"
+              lower="${envelope['z'][0]}" upper="${envelope['z'][1]}"/>
+  <xacro:axis name="gripper_left_joint" parent="z_ram" child="gripper_left"
+              xyz="0 0 -0.35" axis="-1 0 0" lower="0.0" upper="0.04"/>
+  <xacro:axis name="gripper_right_joint" parent="z_ram" child="gripper_right"
+              xyz="0 0 -0.35" axis="1 0 0" lower="0.0" upper="0.04"/>
+  <xacro:axis name="transfer_joint" parent="base_link" child="transfer_carriage"
+              xyz="0 -0.4 -1.0" axis="0 -1 0" lower="0.0" upper="0.5"/>
+
+  <xacro:plc_ros2_control name="PlcSystem"
+                          plc_ip_address="$(arg plc_ip_address)"
+                          plc_ams_net_id="$(arg plc_ams_net_id)"
+                          local_ams_net_id="$(arg local_ams_net_id)"/>
+</robot>

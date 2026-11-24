@@ -1,0 +1,17 @@
+# Ask the perception side: where should the machine go next?
+#
+# The request is deliberately empty. The caller is a control-side node reacting to
+# a machine request; it has no information the perception side needs, and keeping
+# the request empty is what lets completely unrelated implementations satisfy this
+# interface.
+---
+# Target position in SI units (metres), in the frame named by header.frame_id.
+# See units.py: everything on the ROS side of this system is metres, per REP-103.
+geometry_msgs/PointStamped target
+
+# False if no valid target could be produced this cycle.
+bool success
+
+# True when the source has nothing left to offer (bin empty, tray cleared, ...).
+# The caller should stop requesting until the source is replenished.
+bool source_exhausted

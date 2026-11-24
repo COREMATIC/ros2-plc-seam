@@ -1,0 +1,187 @@
+From 99e5d1a8b234b0fad9e75f3a7632fc710e8738e1 Mon Sep 17 00:00:00 2001
+From: Renaud Bouckenooghe <renaud.bouckenooghe@corematic.eu>
+Date: Sun, 22 Nov 2026 02:24:46 +0000
+Subject: [PATCH 5/5] fix: write only the symbols that received a command
+
+write() sends every writable symbol on every cycle. For a symbol with no
+command it sends the value read at the start of the same cycle (the
+fallback added in 00c223a). A value the PLC changes between that read and
+the write is then overwritten with the old one: a PLC that resets a flag
+ROS also writes (an acknowledge, a request id) loses the reset now and
+then.
+
+Now a symbol is written only when one of its command interfaces holds a
+command (not NaN) this cycle. The read state still fills the other
+elements of an array symbol that is written. A cycle without any command
+sends no ADS request.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../beckhoff_ads_hardware_interface.hpp       |  6 ++
+ .../src/beckhoff_ads_hardware_interface.cpp   | 74 +++++++++++++++----
+ 2 files changed, 64 insertions(+), 16 deletions(-)
+
+diff --git a/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp b/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp
+index 9bc60c8..19eefd9 100644
+--- a/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp
++++ b/beckhoff_ads_hardware_interface/include/beckhoff_ads_hardware_interface/beckhoff_ads_hardware_interface.hpp
+@@ -94,6 +94,7 @@ namespace beckhoff_ads_hardware_interface
+     PLCType plc_type;
+     std::string command_interface_name;
+     std::string fallback_state_interface_name; // The state interface name corresponding to the current command interface name
++    size_t layout_index;                       // index of its PLC symbol in ads_item_layouts_write_
+   };
+ 
+   class BeckhoffADSHardwareInterface : public hardware_interface::SystemInterface
+@@ -167,6 +168,11 @@ namespace beckhoff_ads_hardware_interface
+     std::vector<uint8_t> ads_buffer_sum_write_request_;
+     std::vector<uint8_t> ads_buffer_sum_write_response_;
+     size_t num_items_write_ = 0;
++    // Only the symbols that received a command this cycle are written (see write()): the request
++    // actually sent is assembled here from the full buffer above, without allocating in the loop.
++    std::vector<uint8_t> ads_buffer_sum_write_sent_;
++    std::vector<uint8_t> write_layout_has_command_;
++    std::vector<size_t> write_layouts_sent_;
+ 
+     std::vector<ReadInstruction> ads_read_instructions_;
+     std::vector<WriteInstruction> ads_write_instructions_;
+diff --git a/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp b/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
+index 2de601d..fb7686d 100644
+--- a/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
++++ b/beckhoff_ads_hardware_interface/src/beckhoff_ads_hardware_interface.cpp
+@@ -182,6 +182,9 @@ namespace beckhoff_ads_hardware_interface
+ 
+         ads_buffer_sum_write_request_.resize(total_header_size + total_data_size);
+         ads_buffer_sum_write_response_.resize(num_items_write_ * sizeof(uint32_t));
++        ads_buffer_sum_write_sent_.assign(ads_buffer_sum_write_request_.size(), 0);
++        write_layout_has_command_.assign(num_items_write_, 0);
++        write_layouts_sent_.assign(num_items_write_, 0);
+ 
+         auto *header_block_ptr = reinterpret_cast<ADS_ITEM_REQ_HEADER *>(ads_buffer_sum_write_request_.data());
+         size_t current_data_offset = 0;
+@@ -204,6 +207,7 @@ namespace beckhoff_ads_hardware_interface
+                 write_instruction.plc_type = layout.plc_type;
+                 write_instruction.command_interface_name = interface_name;
+                 write_instruction.fallback_state_interface_name = "";
++                write_instruction.layout_index = i;
+ 
+                 // There exists a state interface for the same PLC symbol
+                 if (!layout.state_command_interfaces_map_.empty())
+@@ -605,21 +609,27 @@ namespace beckhoff_ads_hardware_interface
+             double val = get_command(write_instruction.command_interface_name);
+             set_command(write_instruction.command_interface_name, std::numeric_limits<double>::quiet_NaN());
+ 
+-            if (std::isnan(val))
++            // NaN = no command this cycle. Only symbols with at least one command are written: writing
++            // the others back from their state would overwrite a value the PLC changed between this
++            // cycle's read and this write. The state still fills the uncommanded elements of an
++            // array symbol that is written.
++            const bool has_command = !std::isnan(val);
++            if (!has_command)
+             {
+-                // if the original value was NaN and there exist a state interface of the same name, write corresponding state interface
+-                if (!write_instruction.fallback_state_interface_name.empty())
++                if (write_instruction.fallback_state_interface_name.empty())
+                 {
+-                    val = get_state(write_instruction.fallback_state_interface_name);
++                    continue;  // the buffer keeps the last valid command
+                 }
+-
+-                // if we STILL don't have a fallback value on, don't update the write buffer.
+-                // the last valid command is written
++                val = get_state(write_instruction.fallback_state_interface_name);
+                 if (std::isnan(val))
+                 {
+                     continue;
+                 }
+             }
++            if (has_command)
++            {
++                write_layout_has_command_[write_instruction.layout_index] = 1;
++            }
+ 
+             switch (write_instruction.plc_type)
+             {
+@@ -691,14 +701,45 @@ namespace beckhoff_ads_hardware_interface
+             }
+         }
+ 
++        // Assemble the request from the symbols that received a command: their headers, then their data.
++        const auto *all_headers = reinterpret_cast<const ADS_ITEM_REQ_HEADER *>(ads_buffer_sum_write_request_.data());
++        size_t num_sent = 0;
++        for (size_t i = 0; i < num_items_write_; ++i)
++        {
++            if (write_layout_has_command_[i])
++            {
++                write_layouts_sent_[num_sent++] = i;
++                write_layout_has_command_[i] = 0;
++            }
++        }
++        if (num_sent == 0)
++        {
++            return hardware_interface::return_type::OK;
++        }
++        size_t sent_size = 0;
++        for (size_t k = 0; k < num_sent; ++k)
++        {
++            memcpy(ads_buffer_sum_write_sent_.data() + sent_size, &all_headers[write_layouts_sent_[k]], sizeof(ADS_ITEM_REQ_HEADER));
++            sent_size += sizeof(ADS_ITEM_REQ_HEADER);
++        }
++        for (size_t k = 0; k < num_sent; ++k)
++        {
++            const auto &layout = ads_item_layouts_write_[write_layouts_sent_[k]];
++            const size_t data_size = all_headers[write_layouts_sent_[k]].NumBytesData;
++            memcpy(ads_buffer_sum_write_sent_.data() + sent_size,
++                   ads_buffer_sum_write_request_.data() + layout.offset_in_write_request_data, data_size);
++            sent_size += data_size;
++        }
++
+         uint32_t bytes_response_buffer_from_plc = 0;
++        const size_t response_size = num_sent * sizeof(uint32_t);
+         long ads_sum_write_error = ads_device_->ReadWriteReqEx2(
+             ADSIGRP_SUMUP_WRITE,
+-            num_items_write_,
+-            ads_buffer_sum_write_response_.size(),
++            num_sent,
++            response_size,
+             ads_buffer_sum_write_response_.data(),
+-            ads_buffer_sum_write_request_.size(),
+-            ads_buffer_sum_write_request_.data(),
++            sent_size,
++            ads_buffer_sum_write_sent_.data(),
+             &bytes_response_buffer_from_plc);
+ 
+         if (ads_sum_write_error != ADSERR_NOERR)
+@@ -708,23 +749,24 @@ namespace beckhoff_ads_hardware_interface
+             return hardware_interface::return_type::ERROR;
+         }
+ 
+-        if (bytes_response_buffer_from_plc != ads_buffer_sum_write_response_.size())
++        if (bytes_response_buffer_from_plc != response_size)
+         {
+             RCLCPP_ERROR_THROTTLE(getLogger(), *logging_throttle_clock_, 1000,
+                                   "ADS Sum Write response size mismatch (error codes). Expected %zu, Got %u.",
+-                                  ads_buffer_sum_write_response_.size(), bytes_response_buffer_from_plc);
++                                  response_size, bytes_response_buffer_from_plc);
+         }
+ 
+         bool any_item_write_failed = false;
+-        for (size_t i = 0; i < num_items_write_; ++i)
++        for (size_t k = 0; k < num_sent; ++k)
+         {
+             uint32_t item_error_code;
+-            memcpy(&item_error_code, ads_buffer_sum_write_response_.data() + i * sizeof(uint32_t), sizeof(uint32_t));
++            memcpy(&item_error_code, ads_buffer_sum_write_response_.data() + k * sizeof(uint32_t), sizeof(uint32_t));
+             if (item_error_code != ADSERR_NOERR)
+             {
++                const auto &layout = ads_item_layouts_write_[write_layouts_sent_[k]];
+                 RCLCPP_WARN_THROTTLE(getLogger(), *logging_throttle_clock_, 1000,
+                                      "ADS Sum Write sub-op for '%s' (handle 0x%X) failed: 0x%X",
+-                                     ads_item_layouts_write_[i].plc_name_symbolic.c_str(), ads_item_layouts_write_[i].ads_handle, item_error_code);
++                                     layout.plc_name_symbolic.c_str(), layout.ads_handle, item_error_code);
+                 any_item_write_failed = true;
+             }
+         }
+-- 
+2.43.0
+

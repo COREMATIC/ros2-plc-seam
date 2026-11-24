@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+build/
+install/
+log/
+.pixi/
+# fetched by tools/fetch_ads_driver.sh into src/ (pixi workflow)
+src/beckhoff_ads_driver/
+src/ads_vendor/

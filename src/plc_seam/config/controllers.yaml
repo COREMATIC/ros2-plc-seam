@@ -1,0 +1,55 @@
+# Three controllers, no motion planner.
+#
+# The PLC already plans and executes trajectories. A trajectory controller or a
+# motion planner on this side would duplicate that and fight it. What ROS needs
+# is a way to hand over a setpoint, a way to exchange process booleans, and a
+# way to see machine state.
+
+controller_manager:
+  ros__parameters:
+    update_rate: 40          # Hz. Matched to the PLC task cycle, not to a servo loop.
+    handle_exceptions: true
+
+    forward_command:
+      type: forward_command_controller/ForwardCommandController
+
+    gpio_command:
+      type: gpio_controllers/GpioCommandController
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+
+# Cartesian setpoints -> position command interfaces -> PLC symbols.
+forward_command:
+  ros__parameters:
+    joints:
+      - x_joint
+      - y_joint
+      - z_joint
+    interface_name: position
+
+
+# The process handshake. Everything the machine tells us, and the two things
+# we are allowed to tell it back.
+gpio_command:
+  ros__parameters:
+    gpios:
+      - request_target
+      - target_ready
+      - source_empty
+      - empty_ack
+      - picking
+      - placing
+
+    state_interfaces:
+      request_target: {interfaces: [state]}
+      target_ready:   {interfaces: [state]}
+      source_empty:   {interfaces: [state]}
+      empty_ack:      {interfaces: [state]}
+      picking:        {interfaces: [state]}
+      placing:        {interfaces: [state]}
+
+    command_interfaces:
+      target_ready:   {interfaces: [command]}
+      source_empty:   {interfaces: [command]}
