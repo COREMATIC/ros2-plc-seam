@@ -118,21 +118,24 @@ flow is inverted. [`plc_bridge_node.py`](src/plc_seam/plc_seam/plc_bridge_node.p
    request: a level trigger would flood the source.
 3. The bridge converts the point to millimetres and publishes it to the position command
    interfaces.
-4. On the next cycle, the bridge raises `target_ready` and writes `target_id`, the number of
-   the request it answers, in one message. The PLC accepts the target only when `target_id`
-   equals its own `request_id`; it checks the setpoint against its working window, drops
-   `request_target` and moves. The bridge then clears `target_ready`.
+4. The bridge waits until the PLC's read-back of the setpoint (`setpoint_echo`) matches what
+   it sent. Then it raises `target_ready` and writes `target_id`, the number of the request it
+   answers, in one message. The PLC accepts the target only when `target_id` equals its own
+   `request_id`; it checks the setpoint against its working window, drops `request_target`
+   and moves. The bridge then clears `target_ready`.
 5. If the source is empty, the bridge raises `source_empty` instead. It clears it only when the
    PLC acknowledges with `empty_ack`.
 
 Each signal has exactly one writer: the PLC writes `request_target`, `request_id`, `empty_ack`,
 `picking` and `placing`; ROS writes `target_ready`, `target_id` and `source_empty`.
 
-The request number is what makes the answer safe on a real PLC. The setpoint and the flag go to
-two different controllers, so nothing guarantees which one the PLC sees first. If the flag came
-first with the previous setpoint still in place, or an answer arrived late for a request the PLC
-already gave up on, the machine could move to the wrong place. With the number, the PLC ignores
-any flag that does not answer the request it is waiting on.
+Two checks make the answer safe on a real PLC, where the setpoint and the flag go to two
+different controllers and nothing guarantees which one the PLC sees first:
+
+- **The read-back** keeps the flag from overtaking its setpoint: the bridge raises
+  `target_ready` only once the PLC reports the new setpoint.
+- **The request number** rejects a late answer: if the source answers after the PLC gave up on
+  a request and asked again, the number no longer matches and the PLC ignores it.
 
 Three things surprise people:
 

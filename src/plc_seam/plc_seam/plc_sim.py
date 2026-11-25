@@ -41,7 +41,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 
 from plc_seam.handshake import (
-    GPIO_COMMANDS, GPIO_STATES, GPIOS, SETPOINT_COMMANDS, WRITTEN_BY_ROS)
+    ECHO_AXES, GPIO_COMMANDS, GPIO_STATES, GPIOS, SETPOINT_COMMANDS, SETPOINT_ECHO,
+    WRITTEN_BY_ROS)
 from plc_seam import envelope
 from plc_seam.units import m_to_mm, mm_to_m
 
@@ -84,8 +85,13 @@ class PlcModel:
         if name in WRITTEN_BY_ROS and not math.isnan(value):
             self.gpio[name] = value         # the PLC reads back what ROS wrote
 
+    @property
+    def setpoint_mm(self):
+        """The last setpoint received, as a real PLC would hold it."""
+        return self._setpoint or [0.0, 0.0, 0.0]
+
     def on_setpoint(self, xyz_mm):
-        self._setpoint = list(xyz_mm)
+        self._setpoint = [float(v) for v in xyz_mm]
         self._fresh = self.state == 'request'
 
     # ---- the cycle ------------------------------------------------------------
@@ -234,6 +240,10 @@ class PlcSim(Node):
         states.interface_groups = list(GPIOS)
         states.interface_values = [
             InterfaceValue(interface_names=['state'], values=[m.gpio[n]]) for n in GPIOS]
+        # The setpoint as the PLC holds it, read back for the bridge.
+        states.interface_groups.append(SETPOINT_ECHO)
+        states.interface_values.append(InterfaceValue(
+            interface_names=list(ECHO_AXES), values=list(m.setpoint_mm)))
         self._gpio_pub.publish(states)
 
         joints = JointState()

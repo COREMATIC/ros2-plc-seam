@@ -19,11 +19,11 @@ def run(model, seconds, bridge=None):
             bridge(model)
 
 
-def answer(model, xyz_mm):
+def answer(model, xyz_mm, request_id=None):
     """What the bridge does on a rising request_target: setpoint, then target_ready
-    with the number of the request it answers."""
+    with the number of the request it answers (the current one by default)."""
     model.on_setpoint(xyz_mm)
-    model.on_command('target_id', model.gpio['request_id'])
+    model.on_command('target_id', model.gpio['request_id'] if request_id is None else request_id)
     model.on_command('target_ready', 1.0)
 
 
@@ -60,9 +60,7 @@ def test_answer_to_an_older_request_is_ignored():
     run(m, 1.6)                             # no answer: the watchdog asks again
     assert m.gpio['request_id'] == old + 1 and m.gpio['request_target'] == 1.0
 
-    m.on_setpoint((400.0, 300.0, -800.0))   # a late answer to the first request
-    m.on_command('target_id', old)
-    m.on_command('target_ready', 1.0)
+    answer(m, (400.0, 300.0, -800.0), request_id=old)   # a late answer to the first request
     m.step(DT)
     assert m.gpio['picking'] == 0.0, 'a target for an older request must not move the axes'
     assert m.pos_mm == [0.0, 0.0, -400.0]

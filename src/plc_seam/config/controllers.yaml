@@ -43,6 +43,7 @@ gpio_command:
       - empty_ack
       - picking
       - placing
+      - setpoint_echo
 
     state_interfaces:
       request_target: {interfaces: [state]}
@@ -53,6 +54,7 @@ gpio_command:
       empty_ack:      {interfaces: [state]}
       picking:        {interfaces: [state]}
       placing:        {interfaces: [state]}
+      setpoint_echo:  {interfaces: [x, y, z]}
 
     command_interfaces:
       target_ready:   {interfaces: [command]}

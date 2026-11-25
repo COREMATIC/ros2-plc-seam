@@ -55,6 +55,14 @@
     </joint>
   </xacro:macro>
 
+  <!-- One axis of a setpoint read back from the PLC (inside a <gpio>). -->
+  <xacro:macro name="echo_axis" params="axis symbol">
+    <state_interface name="${axis}">
+      <param name="PLC_symbol">${symbol}</param>
+      <param name="PLC_type">LREAL</param>
+    </state_interface>
+  </xacro:macro>
+
   <!-- The plugin is b»robotized's open-source Beckhoff ADS driver:
        https://github.com/b-robotized/beckhoff_ads_driver -->
   <xacro:macro name="plc_ros2_control"
@@ -92,6 +100,14 @@
       <xacro:plc_gpio name="placing"        symbol="GVL.bPlacing"/>
       <xacro:plc_gpio name="target_ready"   symbol="GVL.bTargetReady" read_only="0"/>
       <xacro:plc_gpio name="target_id"      symbol="GVL.udiAnswerTo" read_only="0" type="UDINT"/>
+
+      <!-- The setpoint read back from the PLC: target_ready waits until it
+           matches, so the flag can never reach the PLC before its setpoint. -->
+      <gpio name="setpoint_echo">
+        <xacro:echo_axis axis="x" symbol="GVL.lrTargetX"/>
+        <xacro:echo_axis axis="y" symbol="GVL.lrTargetY"/>
+        <xacro:echo_axis axis="z" symbol="GVL.lrTargetZ"/>
+      </gpio>
       <xacro:plc_gpio name="source_empty"   symbol="GVL.bSourceEmpty" read_only="0"/>
 
     </ros2_control>
