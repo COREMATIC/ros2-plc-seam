@@ -29,6 +29,8 @@ Publishes:  /gpio_command/commands     (control_msgs/DynamicInterfaceGroupValues
 Calls:      get_target                 (plc_seam_interfaces/GetTarget)
 """
 
+import math
+
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -86,8 +88,14 @@ class PlcBridge(Node):
         try:
             iv = msg.interface_values[msg.interface_groups.index(SETPOINT_ECHO)]
             return [iv.values[iv.interface_names.index(a)] for a in ECHO_AXES]
-        except ValueError:
+        except (ValueError, IndexError):
             return None
+
+    @staticmethod
+    def _echo_matches(echo, setpoint):
+        """True when the read-back equals what we sent (LREAL round trip, tiny tolerance)."""
+        return echo is not None and all(
+            math.isclose(e, s, rel_tol=0.0, abs_tol=1e-6) for e, s in zip(echo, setpoint))
 
     def _set_gpio(self, name: str, value: float):
         self._set_gpios({name: value})
@@ -115,13 +123,23 @@ class PlcBridge(Node):
         self._expire_stale_call()
         if self._pending is not None:
             answer_id, setpoint = self._pending
+            echo = self._read_echo(msg)
             if request != 1.0 or request_id != answer_id:
-                self.get_logger().warn('Request changed before the answer went out; discarded')
+                self.get_logger().warn(
+                    f'Request changed before the answer went out; discarded '
+                    f'(sent {setpoint}, PLC echo {echo})')
                 self._pending = None
-            elif self._read_echo(msg) == setpoint:
+                if request == 1.0 and self._prev_request == 1.0 and self._in_flight is None:
+                    # The PLC asks again with a new number while its request
+                    # stays high: no rising edge will come, so serve it now.
+                    self.request_target(request_id)
+            elif self._echo_matches(echo, setpoint):
                 # The PLC holds the new setpoint: only now the flag, with the
                 # number of the request it answers.
-                self._set_gpios({TARGET_ID: answer_id, TARGET_READY: 1.0})
+                flags = {TARGET_READY: 1.0}
+                if answer_id is not None:
+                    flags = {TARGET_ID: answer_id, **flags}
+                self._set_gpios(flags)
                 self._pending = None
         if request == 1.0 and self._prev_request != 1.0 and self._in_flight is None:
             self.request_target(request_id)

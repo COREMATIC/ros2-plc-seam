@@ -49,6 +49,7 @@ def test_one_full_cycle_ends_with_a_new_request():
 
 def test_target_ready_without_a_new_setpoint_is_ignored():
     m = PlcModel(WINDOW)
+    m.on_command('target_id', m.gpio['request_id'])   # the right number: only the setpoint is missing
     m.on_command('target_ready', 1.0)       # a stale flag, no setpoint since the request
     run(m, 1.0)
     assert m.state == 'request' and m.gpio['picking'] == 0.0

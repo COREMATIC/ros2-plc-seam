@@ -197,7 +197,8 @@ reaches the PLC.
    inside function blocks: mirror them into a GVL.
 3. On the PLC, add a route to this computer's AMS Net ID.
 4. Implement the PLC side of the handshake, as `plc_sim.py` does: add one to the request
-   number on each new request, and accept a target only when `target_id` matches it.
+   number on each new request, one PLC cycle before raising `request_target`, and accept a
+   target only when `target_id` matches it.
 5. Launch:
 
    ```bash
