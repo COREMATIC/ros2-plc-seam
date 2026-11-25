@@ -5,8 +5,9 @@ The bridge never talks to the PLC directly. It talks to two controllers:
 Publish the same topics from a plain node and the bridge cannot tell the
 difference. That is what this node does:
 
-1. It raises ``request_target`` and waits for ``target_ready`` together with
-   a setpoint received since the request.
+1. It numbers the request (``request_id``), raises ``request_target`` and waits
+   for ``target_ready`` with ``target_id`` equal to that number, and a setpoint
+   received since the request. A flag for an older request is ignored.
 2. It checks the setpoint against its working window. Outside the window it
    refuses, drops the request and asks again: the PLC has the last word.
 3. Inside the window it drops the request (the bridge then clears
@@ -40,7 +41,8 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray
 
 from plc_seam.handshake import (
-    GPIO_COMMANDS, GPIO_STATES, GPIOS, SETPOINT_COMMANDS, WRITTEN_BY_ROS)
+    ECHO_AXES, GPIO_COMMANDS, GPIO_STATES, GPIOS, SETPOINT_COMMANDS, SETPOINT_ECHO,
+    WRITTEN_BY_ROS)
 from plc_seam import envelope
 from plc_seam.units import m_to_mm, mm_to_m
 
@@ -83,8 +85,13 @@ class PlcModel:
         if name in WRITTEN_BY_ROS and not math.isnan(value):
             self.gpio[name] = value         # the PLC reads back what ROS wrote
 
+    @property
+    def setpoint_mm(self):
+        """The last setpoint received, as a real PLC would hold it."""
+        return self._setpoint or [0.0, 0.0, 0.0]
+
     def on_setpoint(self, xyz_mm):
-        self._setpoint = list(xyz_mm)
+        self._setpoint = [float(v) for v in xyz_mm]
         self._fresh = self.state == 'request'
 
     # ---- the cycle ------------------------------------------------------------
@@ -93,6 +100,7 @@ class PlcModel:
         self.state = 'request'
         self._fresh = False
         self._timer = self.request_timeout_s
+        self.gpio['request_id'] += 1.0     # a new number for every request
         self.gpio['request_target'] = 1.0
 
     def in_window(self, xyz_mm):
@@ -116,7 +124,8 @@ class PlcModel:
             if g['source_empty'] == 1.0:
                 g['request_target'] = 0.0
                 self.state, self._timer = 'refill', self.refill_s
-            elif g['target_ready'] == 1.0 and self._fresh:
+            elif (g['target_ready'] == 1.0 and self._fresh
+                  and g['target_id'] == g['request_id']):
                 g['request_target'] = 0.0
                 if self.in_window(self._setpoint):
                     self._goal = self._setpoint
@@ -231,6 +240,10 @@ class PlcSim(Node):
         states.interface_groups = list(GPIOS)
         states.interface_values = [
             InterfaceValue(interface_names=['state'], values=[m.gpio[n]]) for n in GPIOS]
+        # The setpoint as the PLC holds it, read back for the bridge.
+        states.interface_groups.append(SETPOINT_ECHO)
+        states.interface_values.append(InterfaceValue(
+            interface_names=list(ECHO_AXES), values=list(m.setpoint_mm)))
         self._gpio_pub.publish(states)
 
         joints = JointState()

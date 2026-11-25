@@ -36,20 +36,27 @@ gpio_command:
   ros__parameters:
     gpios:
       - request_target
+      - request_id
       - target_ready
+      - target_id
       - source_empty
       - empty_ack
       - picking
       - placing
+      - setpoint_echo
 
     state_interfaces:
       request_target: {interfaces: [state]}
+      request_id:     {interfaces: [state]}
       target_ready:   {interfaces: [state]}
+      target_id:      {interfaces: [state]}
       source_empty:   {interfaces: [state]}
       empty_ack:      {interfaces: [state]}
       picking:        {interfaces: [state]}
       placing:        {interfaces: [state]}
+      setpoint_echo:  {interfaces: [x, y, z]}
 
     command_interfaces:
       target_ready:   {interfaces: [command]}
+      target_id:      {interfaces: [command]}
       source_empty:   {interfaces: [command]}

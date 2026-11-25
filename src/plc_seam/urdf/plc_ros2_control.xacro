@@ -21,18 +21,18 @@
 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- A boolean process signal.
+  <!-- A process signal: BOOL by default, UDINT for the request number.
        read_only=1 -> the machine owns it, ROS only observes. -->
-  <xacro:macro name="plc_gpio" params="name symbol read_only:=1">
+  <xacro:macro name="plc_gpio" params="name symbol read_only:=1 type:=BOOL">
     <gpio name="${name}">
       <state_interface name="state">
         <param name="PLC_symbol">${symbol}</param>
-        <param name="PLC_type">BOOL</param>
+        <param name="PLC_type">${type}</param>
       </state_interface>
       <xacro:if value="${read_only != 1}">
         <command_interface name="command">
           <param name="PLC_symbol">${symbol}</param>
-          <param name="PLC_type">BOOL</param>
+          <param name="PLC_type">${type}</param>
         </command_interface>
       </xacro:if>
     </gpio>
@@ -53,6 +53,14 @@
         </command_interface>
       </xacro:if>
     </joint>
+  </xacro:macro>
+
+  <!-- One axis of a setpoint read back from the PLC (inside a <gpio>). -->
+  <xacro:macro name="echo_axis" params="axis symbol">
+    <state_interface name="${axis}">
+      <param name="PLC_symbol">${symbol}</param>
+      <param name="PLC_type">LREAL</param>
+    </state_interface>
   </xacro:macro>
 
   <!-- The plugin is b»robotized's open-source Beckhoff ADS driver:
@@ -86,10 +94,20 @@
 
       <!-- The handshake. Names match plc_bridge_node.py. -->
       <xacro:plc_gpio name="request_target" symbol="GVL.bRequestTarget"/>
+      <xacro:plc_gpio name="request_id"     symbol="GVL.udiRequestCount" type="UDINT"/>
       <xacro:plc_gpio name="empty_ack"      symbol="GVL.bEmptyAck"/>
       <xacro:plc_gpio name="picking"        symbol="GVL.bPicking"/>
       <xacro:plc_gpio name="placing"        symbol="GVL.bPlacing"/>
       <xacro:plc_gpio name="target_ready"   symbol="GVL.bTargetReady" read_only="0"/>
+      <xacro:plc_gpio name="target_id"      symbol="GVL.udiAnswerTo" read_only="0" type="UDINT"/>
+
+      <!-- The setpoint read back from the PLC: target_ready waits until it
+           matches, so the flag can never reach the PLC before its setpoint. -->
+      <gpio name="setpoint_echo">
+        <xacro:echo_axis axis="x" symbol="GVL.lrTargetX"/>
+        <xacro:echo_axis axis="y" symbol="GVL.lrTargetY"/>
+        <xacro:echo_axis axis="z" symbol="GVL.lrTargetZ"/>
+      </gpio>
       <xacro:plc_gpio name="source_empty"   symbol="GVL.bSourceEmpty" read_only="0"/>
 
     </ros2_control>
