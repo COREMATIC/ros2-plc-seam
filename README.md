@@ -68,8 +68,8 @@ flowchart LR
         C[camera]
     end
     sources -- "GetTarget (the seam)" --> B[plc_bridge]
-    B -- "setpoint, target_ready" --> P["PLC: plc_sim, or ros2_control + ADS driver"]
-    P -- "request_target, /joint_states" --> B
+    B -- "setpoint, target_ready + target_id" --> P["PLC: plc_sim, or ros2_control + ADS driver"]
+    P -- "request_target + request_id, /joint_states" --> B
 ```
 
 A target source answers `GetTarget` with a point in metres. `plc_bridge` waits for the PLC to
@@ -113,18 +113,26 @@ The camera source takes an injected detector function. It does not drive a real 
 In most ROS systems, ROS decides when the robot moves. Here the PLC decides, so the control
 flow is inverted. [`plc_bridge_node.py`](src/plc_seam/plc_seam/plc_bridge_node.py) implements it:
 
-1. The PLC raises `request_target`.
+1. The PLC adds one to `request_id` and raises `request_target`.
 2. The bridge sees the **rising edge** and calls `get_target` asynchronously. One edge, one
    request: a level trigger would flood the source.
 3. The bridge converts the point to millimetres and publishes it to the position command
    interfaces.
-4. The bridge raises `target_ready`. The PLC checks the setpoint against its own working window,
-   drops `request_target` and moves. The bridge then clears `target_ready`.
+4. On the next cycle, the bridge raises `target_ready` and writes `target_id`, the number of
+   the request it answers, in one message. The PLC accepts the target only when `target_id`
+   equals its own `request_id`; it checks the setpoint against its working window, drops
+   `request_target` and moves. The bridge then clears `target_ready`.
 5. If the source is empty, the bridge raises `source_empty` instead. It clears it only when the
    PLC acknowledges with `empty_ack`.
 
-Each signal has exactly one writer: the PLC writes `request_target`, `empty_ack`, `picking` and
-`placing`; ROS writes `target_ready` and `source_empty`.
+Each signal has exactly one writer: the PLC writes `request_target`, `request_id`, `empty_ack`,
+`picking` and `placing`; ROS writes `target_ready`, `target_id` and `source_empty`.
+
+The request number is what makes the answer safe on a real PLC. The setpoint and the flag go to
+two different controllers, so nothing guarantees which one the PLC sees first. If the flag came
+first with the previous setpoint still in place, or an answer arrived late for a request the PLC
+already gave up on, the machine could move to the wrong place. With the number, the PLC ignores
+any flag that does not answer the request it is waiting on.
 
 Three things surprise people:
 
@@ -136,6 +144,7 @@ Three things surprise people:
 [`plc_sim.py`](src/plc_seam/plc_seam/plc_sim.py) plays the PLC's side of the same protocol. Read
 it as a specification for the PLC program:
 
+- It accepts a target only when `target_id` matches the number of the request it raised.
 - It refuses a setpoint outside its own working window and asks again, so the PLC keeps the
   last word.
 - It has a request watchdog: with no valid answer within 5 seconds, it drops the request and
@@ -184,7 +193,8 @@ reaches the PLC.
    in `MAIN` or a global variable list (GVL). Symbolic access over ADS does not reach variables
    inside function blocks: mirror them into a GVL.
 3. On the PLC, add a route to this computer's AMS Net ID.
-4. Implement the PLC side of the handshake, as `plc_sim.py` does.
+4. Implement the PLC side of the handshake, as `plc_sim.py` does: add one to the request
+   number on each new request, and accept a target only when `target_id` matches it.
 5. Launch:
 
    ```bash

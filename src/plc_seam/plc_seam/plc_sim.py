@@ -5,8 +5,9 @@ The bridge never talks to the PLC directly. It talks to two controllers:
 Publish the same topics from a plain node and the bridge cannot tell the
 difference. That is what this node does:
 
-1. It raises ``request_target`` and waits for ``target_ready`` together with
-   a setpoint received since the request.
+1. It numbers the request (``request_id``), raises ``request_target`` and waits
+   for ``target_ready`` with ``target_id`` equal to that number, and a setpoint
+   received since the request. A flag for an older request is ignored.
 2. It checks the setpoint against its working window. Outside the window it
    refuses, drops the request and asks again: the PLC has the last word.
 3. Inside the window it drops the request (the bridge then clears
@@ -93,6 +94,7 @@ class PlcModel:
         self.state = 'request'
         self._fresh = False
         self._timer = self.request_timeout_s
+        self.gpio['request_id'] += 1.0     # a new number for every request
         self.gpio['request_target'] = 1.0
 
     def in_window(self, xyz_mm):
@@ -116,7 +118,8 @@ class PlcModel:
             if g['source_empty'] == 1.0:
                 g['request_target'] = 0.0
                 self.state, self._timer = 'refill', self.refill_s
-            elif g['target_ready'] == 1.0 and self._fresh:
+            elif (g['target_ready'] == 1.0 and self._fresh
+                  and g['target_id'] == g['request_id']):
                 g['request_target'] = 0.0
                 if self.in_window(self._setpoint):
                     self._goal = self._setpoint

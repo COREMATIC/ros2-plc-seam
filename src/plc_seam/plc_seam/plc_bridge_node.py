@@ -13,8 +13,9 @@ The cycle
    the source.
 3. The response is converted to machine units and published to the position
    command interfaces.
-4. We raise ``target_ready``. The PLC executes the move and drops
-   ``request_target``.
+4. On the next GPIO cycle we raise ``target_ready`` with ``target_id``, the
+   PLC's number for the request we answer. The PLC moves only if the number
+   matches, and drops ``request_target``.
 5. If the source is exhausted we raise ``source_empty`` instead, and clear it
    only once the PLC acknowledges with ``empty_ack``. Two-way, because a
    dropped boolean here means a gripper closing on nothing.
@@ -36,8 +37,8 @@ from control_msgs.msg import DynamicInterfaceGroupValues, InterfaceValue
 
 from plc_seam_interfaces.srv import GetTarget
 from plc_seam.handshake import (
-    EMPTY_ACK, GPIO_COMMANDS, GPIO_STATES, REQUEST_TARGET, SETPOINT_COMMANDS,
-    SOURCE_EMPTY, TARGET_READY)
+    EMPTY_ACK, GPIO_COMMANDS, GPIO_STATES, REQUEST_ID, REQUEST_TARGET, SETPOINT_COMMANDS,
+    SOURCE_EMPTY, TARGET_ID, TARGET_READY)
 from plc_seam.units import xyz_m_to_mm
 
 
@@ -53,6 +54,8 @@ class PlcBridge(Node):
         self.declare_parameter('service_timeout_s', 5.0)
 
         self._prev_request = 0.0
+        self._request_id = None             # the PLC's number for the open request
+        self._answer_id = None              # setpoint sent; target_ready goes out next cycle
         self._in_flight = None              # (future, start time) of the pending call
         self._source_empty = False          # we raised source_empty, no ack yet
 
@@ -79,13 +82,16 @@ class PlcBridge(Node):
         return values[0] if values else None
 
     def _set_gpio(self, name: str, value: float):
+        self._set_gpios({name: value})
+
+    def _set_gpios(self, values: dict):
+        """One message: the controller writes all of them in the same cycle."""
         msg = DynamicInterfaceGroupValues()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.interface_groups = [name]
-        iv = InterfaceValue()
-        iv.interface_names = ['command']
-        iv.values = [value]
-        msg.interface_values = [iv]
+        msg.interface_groups = list(values)
+        msg.interface_values = [
+            InterfaceValue(interface_names=['command'], values=[float(v)])
+            for v in values.values()]
         self._gpio_pub.publish(msg)
 
     # ---- the cycle -------------------------------------------------------
@@ -97,8 +103,20 @@ class PlcBridge(Node):
         if request is None:
             return
 
+        request_id = self._read_gpio(msg, REQUEST_ID)
         self._expire_stale_call()
+        if self._answer_id is not None:
+            # The setpoint went out on the previous cycle; now the flag, with the
+            # number of the request it answers. The PLC checks that number, so a
+            # flag that overtakes its setpoint, or answers an older request, is
+            # ignored instead of moving the machine to the previous target.
+            if request == 1.0 and request_id == self._answer_id:
+                self._set_gpios({TARGET_ID: self._answer_id, TARGET_READY: 1.0})
+            else:
+                self.get_logger().warn('Request changed before the answer went out; discarded')
+            self._answer_id = None
         if request == 1.0 and self._prev_request != 1.0 and self._in_flight is None:
+            self._request_id = request_id
             self.request_target()
         elif request != 1.0 and (
                 self._prev_request == 1.0 or self._read_gpio(msg, TARGET_READY) == 1.0):
@@ -172,7 +190,9 @@ class PlcBridge(Node):
         # ---- the boundary. SI stops here, machine units begin. ----
         command.data = xyz_m_to_mm(p.x, p.y, p.z)
         self._cmd_pub.publish(command)
-        self._set_gpio(TARGET_READY, 1.0)
+        # target_ready and target_id go out on the next GPIO cycle, after the
+        # setpoint, as one message (see on_gpio_states).
+        self._answer_id = self._request_id
 
         self.get_logger().info(
             f'Target {p.x:.3f}, {p.y:.3f}, {p.z:.3f} m '
