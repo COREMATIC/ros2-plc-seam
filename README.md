@@ -6,8 +6,6 @@ and the PLC decides whether and how to move. The full cycle runs on a laptop wit
 the same stack drives a Beckhoff PLC through `ros2_control`.
 
 It is the companion code of the ROSCon Belgium 2026 talk *The Seam Between Sim and Steel*.
-It is reduced from a bin-picking cell in commissioning: names, symbols and dimensions are
-neutral examples.
 
 ## Run it with no PLC
 
